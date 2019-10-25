@@ -2,6 +2,7 @@
 """cligh — Command line interface to GitHub
 
 Usage:
+  cligh batch-clone --target=<dir> [--filter=<regex>]
   cligh config
   cligh collabs [--filter=<regex>]
   cligh collabs leave [--all] [--filter=<regex>]
@@ -9,7 +10,7 @@ Usage:
   cligh invitations accept [--all] [--filter=<regex>]
   cligh invitations decline [--all] [--filter=<regex>]
   cligh user repos [--user=<user>] [--filter=<regex>]
-  cligh user repos clone [--user=<user>] [--target=<dir>] [--filter=<regex>] [--from-subdirs]
+  cligh user repos clone [--user=<user>] [--target=<dir>] [--filter=<regex>]
 """
 
 import github
@@ -236,11 +237,11 @@ def clone_repos(user, target=None, filterRe=None):
     print(cmd)
     os.system(cmd)
 
-def clone_repos_from_subdirs(target=None, filterRe=None):
+def batch_clone(target=None, filterRe=None):
 
-    dirs = [ d for d in os.listdir() if os.path.isdir(d) ]
+    subdirs = [ d for d in os.listdir() if os.path.isdir(d) ]
 
-    for d in dirs:
+    for d in subdirs:
 
         subdir_target = os.path.join(d, target if target else "")
 
@@ -413,44 +414,34 @@ def cligh():
     force = args['--all']
     target = args['--target']
 
-    if ( args['collabs'] ):
+    if args['batch-clone']:
+        batch_clone(target=target, filterRe=filterRe)
 
-        if ( args['leave'] ):
+    elif args['collabs']:
+
+        if args['leave']:
             leave_collabs(force=force, filterRe=filterRe)
 
         else :
             list_collabs(filterRe=filterRe)
 
-    elif ( args['invitations'] ):
+    elif args['invitations']:
 
-            if ( args['accept'] ) :
+            if args['accept']:
                 accept_invitations(force=force, filterRe=filterRe)
 
-            elif ( args['decline'] ) :
+            elif args['decline']:
                 decline_invitations(force=force, filterRe=filterRe)
 
             else :
                 list_invitations(filterRe=filterRe)
 
-    elif ( args['user'] ):
+    elif args['user']:
 
-        if ( args['repos'] ):
+        if args['repos']:
 
-            if ( args['clone'] ):
-
-                if ( args['--from-subdirs'] ):
-
-                    if args['--user']:
-                        print("The --user option cannot be used with --from-subdirs")
-                        exit(0)
-
-                    if not args['--target']:
-                        print("The --target option must be specified with --from-subdirs")
-                        exit(0)
-
-                    clone_repos_from_subdirs(target=target, filterRe=filterRe)
-                else:
-                    clone_repos(user, target=target, filterRe=filterRe)
+            if args['clone']:
+                clone_repos(user, target=target, filterRe=filterRe)
 
             else:
                 list_repos(user, filterRe=filterRe)
