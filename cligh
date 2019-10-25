@@ -28,8 +28,6 @@ CONFIG_PATH = os.path.join(Path.home(), ".cligh")
 CONFIG_FILE_NAME = "config.json"
 CONFIG_FILE_PATH = os.path.join(CONFIG_PATH, CONFIG_FILE_NAME)
 
-GITHUB_LOGIN_FILENAME = "github-login.txt"
-
 TTY_RED = "\033[91m"
 TTY_ORANGE = "\u001b[31;1m"
 TTY_GREEN = "\033[92m"
@@ -43,21 +41,48 @@ v4headers = {}
 v3headers = {
     "Accept" : "application/vnd.github.v3+json"
 }
-g = None
 
 def creds_are_missing():
     return not 'github_user' in cfg or not cfg['github_user'] \
         or not 'github_token' in cfg or not cfg['github_token']
 
-def prompt_config():
-    github_user = input("What is your GitHub username? ")
-    github_token = input("What is your GitHub access token? ")
+def load_config(force_prompt=False):
 
-    cfg['github_user'] = github_user
-    cfg['github_token'] = github_token
+    def _load_config():
+        global cfg
+        with open(CONFIG_FILE_PATH) as config_file:
+            cfg = json.load(config_file)
 
+    def config_exists():
+        return os.path.exists(CONFIG_FILE_PATH)
+
+    if not config_exists():
+        print("This must be your first time running cligh!  Take a second to do some configuration...")
+        Path(CONFIG_PATH).mkdir(parents=True, exist_ok=True)
+        prompt_config()
+        _load_config()
+    elif force_prompt:
+        _load_config()
+        prompt_config(cfg)
+        _load_config()
+    else:
+        _load_config()
+
+
+def prompt_config(defaults=None):
+
+    cfg['github_user'] = prompt_def("What is your GitHub username? {}", defaults['github_user'] if defaults else "")
+    cfg['github_token'] = prompt_def("What is your GitHub access token? {}")
+    cfg['github_username_file'] = prompt_def("What name will you use for GitHub username files? {}", defaults['github_username_file'] if defaults else "")
+
+    print("Saving conifuration to {}".format(CONFIG_FILE_PATH))
     with open(CONFIG_FILE_PATH, 'w+') as config_file:
         json.dump(cfg, config_file, indent=4, sort_keys=True)
+
+def prompt_def(prompt, default=""):
+    response = input(prompt.format(" [default:{}{}{}]".format(TTY_GREEN, default, TTY_END) if default else "") + " ")
+
+    return response if response else default
 
 def prompt(prompt, valid_options=[], default_option_index=-1):
 
@@ -68,7 +93,7 @@ def prompt(prompt, valid_options=[], default_option_index=-1):
     # due to the coloring we're about to do
     opts = valid_options.copy()
     # color the default option
-    if ( there_is_a_default_option() ) :
+    if there_is_a_default_option():
         opts[default_option_index] = TTY_GREEN + opts[default_option_index] + TTY_END
 
     option_str = "[{}]".format("/".join(opts))
@@ -248,7 +273,7 @@ def batch_clone(target=None, filterRe=None):
 
         subdir_target = os.path.join(d, target if target else "")
 
-        p = os.path.join(d, GITHUB_LOGIN_FILENAME)
+        p = os.path.join(d, cfg['github_username_file'])
         if ( os.path.exists(p) ):
 
             with open(p, 'r') as github_login_file:
@@ -263,7 +288,7 @@ def batch_clone(target=None, filterRe=None):
                     print("{}CLONING{} into {}...".format(TTY_GREEN, TTY_END, subdir_target))
                     clone_repos(user, subdir_target, filterRe)
         else:
-            print("SKIPPING {} because no {} file was found".format(d, GITHUB_LOGIN_FILENAME))
+            print("SKIPPING {} because no {} file was found".format(d, cfg['github_username_file']))
             continue
 
 def get_collabs(filterRe=None):
@@ -403,8 +428,8 @@ def cligh():
 
     user = cfg['github_user']
 
-    if ( os.path.exists(GITHUB_LOGIN_FILENAME) ):
-        with open(GITHUB_LOGIN_FILENAME, 'r') as github_login_file:
+    if ( os.path.exists(cfg['github_username_file']) ):
+        with open(cfg['github_username_file'], 'r') as github_login_file:
             user = github_login_file.read().replace('\n', '')
     elif args['--user']:
         user = args['--user']
@@ -454,17 +479,7 @@ def cligh():
 if __name__ == '__main__':
     args = docopt(__doc__, version="cligh 0.1")
 
-    Path(CONFIG_PATH).mkdir(parents=True, exist_ok=True)
-    if os.path.exists(CONFIG_FILE_PATH):
-        with open(CONFIG_FILE_PATH) as config_file:
-            cfg = json.load(config_file)
-
-    if ( args['config'] or creds_are_missing() ):
-        
-        if ( not args['config'] ) :
-            print("You have not yet configured a GitHub user and access token.")
-
-        prompt_config()
+    load_config(force_prompt=args['config'])
 
     v3headers['Authorization'] = "bearer " + cfg['github_token']
     v4headers['Authorization'] = "bearer " + cfg['github_token']
