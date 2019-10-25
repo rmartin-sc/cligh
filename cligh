@@ -9,7 +9,7 @@ Usage:
   cligh invitations accept [--all] [--filter=<regex>]
   cligh invitations decline [--all] [--filter=<regex>]
   cligh user repos [--user=<user>] [--filter=<regex>]
-  cligh user repos clone [--user=<user>] [--all] [--target=<dir>] [--filter=<regex>]
+  cligh user repos clone [--user=<user>] [--target=<dir>] [--filter=<regex>] [--from-subdirs]
 """
 
 import github
@@ -210,6 +210,11 @@ def repo_name(r):
 def list_repos(user, filterRe=None):
     [ print(repo_name(r)) for r in get_repos(user, filterRe) ]
 
+def pull_repo(target="."):
+    cmd = "pushd {} && git pull && popd".format(target)
+    print(cmd)
+    os.system(cmd)
+
 def clone_repos(user, target=None, filterRe=None):
     repos = get_repos(user, filterRe)
 
@@ -231,6 +236,31 @@ def clone_repos(user, target=None, filterRe=None):
     print(cmd)
     os.system(cmd)
 
+def clone_repos_from_subdirs(target=None, filterRe=None):
+
+    dirs = [ d for d in os.listdir() if os.path.isdir(d) ]
+
+    for d in dirs:
+
+        subdir_target = os.path.join(d, target if target else "")
+
+        p = os.path.join(d, GITHUB_LOGIN_FILENAME)
+        if ( os.path.exists(p) ):
+
+            with open(p, 'r') as github_login_file:
+
+                user = github_login_file.read().replace('\n', '')
+
+                if os.path.exists(subdir_target):
+                    print("{}PULLING{} ({} already exists)".format(TTY_RED, TTY_END, subdir_target))
+                    pull_repo(subdir_target)
+                    continue
+                else:
+                    print("{}CLONING{} into {}...".format(TTY_GREEN, TTY_END, subdir_target))
+                    clone_repos(user, subdir_target, filterRe)
+        else:
+            print("SKIPPING {} because no {} file was found".format(d, GITHUB_LOGIN_FILENAME))
+            continue
 
 def get_collabs(filterRe=None):
     repos = v3request_all_pages("/user/repos", {"affiliation": "collaborator"})
@@ -407,7 +437,20 @@ def cligh():
         if ( args['repos'] ):
 
             if ( args['clone'] ):
-                clone_repos(user, target=target, filterRe=filterRe)
+
+                if ( args['--from-subdirs'] ):
+
+                    if args['--user']:
+                        print("The --user option cannot be used with --from-subdirs")
+                        exit(0)
+
+                    if not args['--target']:
+                        print("The --target option must be specified with --from-subdirs")
+                        exit(0)
+
+                    clone_repos_from_subdirs(target=target, filterRe=filterRe)
+                else:
+                    clone_repos(user, target=target, filterRe=filterRe)
 
             else:
                 list_repos(user, filterRe=filterRe)
