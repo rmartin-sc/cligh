@@ -213,11 +213,15 @@ def list_repos(user, filterRe=None):
 def clone_repos(user, target=None, filterRe=None):
     repos = get_repos(user, filterRe)
 
+    if len(repos) == 0:
+        print("No repos to clone")
+        return
+
     which_repo = 1
-    if ( len(repos) > 1 ):
+    if len(repos) > 1:
         i = 1
         for r in repos:
-            print("[{}] {}".format(i, r['html_url']))
+            print("[{}] {} [{}]".format(i, r['html_url'], i))
             i += 1
 
         which_repo = int(prompt("Which repository would you like to clone{}?".format("into " + target if target else ""), 
