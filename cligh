@@ -24,7 +24,10 @@ from docopt import docopt
 from github import Github
 from pathlib import Path
 
-CONFIG_FILENAME = "config.json"
+CONFIG_PATH = os.path.join(Path.home(), ".cligh")
+CONFIG_FILE_NAME = "config.json"
+CONFIG_FILE_PATH = os.path.join(CONFIG_PATH, CONFIG_FILE_NAME)
+
 GITHUB_LOGIN_FILENAME = "github-login.txt"
 
 TTY_RED = "\033[91m"
@@ -53,7 +56,7 @@ def prompt_config():
     cfg['github_user'] = github_user
     cfg['github_token'] = github_token
 
-    with open(os.path.join(os.path.dirname(__file__), CONFIG_FILENAME), 'w') as config_file:
+    with open(CONFIG_FILE_PATH, 'w+') as config_file:
         json.dump(cfg, config_file, indent=4, sort_keys=True)
 
 def prompt(prompt, valid_options=[], default_option_index=-1):
@@ -451,8 +454,10 @@ def cligh():
 if __name__ == '__main__':
     args = docopt(__doc__, version="cligh 0.1")
 
-    with open(os.path.join(os.path.dirname(__file__), CONFIG_FILENAME)) as config_file:
-        cfg = json.load(config_file)
+    Path(CONFIG_PATH).mkdir(parents=True, exist_ok=True)
+    if os.path.exists(CONFIG_FILE_PATH):
+        with open(CONFIG_FILE_PATH) as config_file:
+            cfg = json.load(config_file)
 
     if ( args['config'] or creds_are_missing() ):
         
