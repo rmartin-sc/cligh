@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-complete -W "collabs config invitations user" cligh
+complete -W "batch-clone collabs config invitations user" cligh
 complete -W "leave" cligh collabs
 complete -W "accept decline" cligh invitations
 complete -W "repos" cligh user

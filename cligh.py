@@ -13,7 +13,6 @@ Usage:
   cligh user repos clone [--user=<user>] [--target=<dir>] [--filter=<regex>]
 """
 
-import github
 import json
 import os
 import re
@@ -21,7 +20,6 @@ import requests
 import sys
 
 from docopt import docopt
-from github import Github
 from pathlib import Path
 
 CONFIG_PATH = os.path.join(Path.home(), ".cligh")
@@ -101,10 +99,10 @@ def prompt(prompt, valid_options=[], default_option_index=-1):
     while True:
         c = input("{} {} ".format(prompt, option_str))
         if ( c in valid_options ) :
-            break;
+            break
         elif ( there_is_a_default_option() and c == "" ) :
             c = valid_options[default_option_index]
-            break;
+            break
 
     return c
 
@@ -122,12 +120,6 @@ def v3Url(q):
 
 def v3request_all_pages(q, data=None):
 
-    def next_page(json):
-        return None
-
-    def merge(response_a, response_b):
-        return None
-
     response = requests.get("{}{}".format(V3_API_BASE, q), headers=v3headers, params=data)
 
     fullresponse = response.json()
@@ -138,6 +130,10 @@ def v3request_all_pages(q, data=None):
         fullresponse.extend(response.json())
 
     return fullresponse
+
+def v4request(q):
+    response = requests.post(V4_API_BASE, json=query(q), headers=v4headers)
+    return response.json()
 
 def v4request_all_pages(q, path_to_paginated_array):
 
@@ -197,7 +193,7 @@ def v4request_all_pages(q, path_to_paginated_array):
 
         cursor = next_page(response_json, path_to_paginated_array)
         if ( not cursor ) :
-            break;
+            break
 
     final_response = responses[0]
     del responses[0]
@@ -207,7 +203,13 @@ def v4request_all_pages(q, path_to_paginated_array):
 
     return final_response
 
+def user_exists(user):
+    response = v4request("user(login: \"{}\") {{ login }}".format(user))
 
+    if ( 'errors' in response ):
+        return False
+    
+    return True
 
 def get_repos(user, filterRe=None):
     u = "user(login: \"{}\")".format(user)
@@ -231,7 +233,7 @@ def get_repos(user, filterRe=None):
     return ret
 
 def invitation_name(i):
-    return "{}/{}".format(i['inviter']['login'], i['repository']['name'])
+    return "{}/{}".format(i['inviter']['login'], i['repository']['name'] if i['repository'] else "")
 
 def repo_name(r):
     return r['full_name']
@@ -280,6 +282,14 @@ def batch_clone(target=None, filterRe=None):
 
                 user = github_login_file.read().replace('\n', '')
 
+                if user == '' :
+                    print("{}SKIPPING{} {} because the {} file was empty".format(TTY_RED, TTY_END, d, cfg['github_username_file']))
+                    continue
+
+                if not user_exists(user):
+                    print("{}SKIPPING{} {} because no GitHub user {} exists".format(TTY_RED, TTY_END, d, user))
+                    continue
+
                 if os.path.exists(subdir_target):
                     print("{}PULLING{} ({} already exists)".format(TTY_RED, TTY_END, subdir_target))
                     pull_repo(subdir_target)
@@ -288,7 +298,7 @@ def batch_clone(target=None, filterRe=None):
                     print("{}CLONING{} into {}...".format(TTY_GREEN, TTY_END, subdir_target))
                     clone_repos(user, subdir_target, filterRe)
         else:
-            print("SKIPPING {} because no {} file was found".format(d, cfg['github_username_file']))
+            print("{}SKIPPING{} {} because no {} file was found".format(TTY_RED, TTY_END, d, cfg['github_username_file']))
             continue
 
 def get_collabs(filterRe=None):
@@ -342,7 +352,9 @@ def get_invitations(filterRe=None):
     invitations = v3request_all_pages("/user/repository_invitations")
     
     if ( filterRe ): 
-        return [ i for i in invitations if filterRe.search(i['repository']['full_name']) ]
+        return [ i for i in invitations if (filterRe.search(i['repository']['full_name']) if i['repository'] else False) ]
+    else:
+        return [ i for i in invitations if i['repository'] ]
 
     return invitations
 
@@ -426,57 +438,6 @@ def decline_invitations(force=False, filterRe=None):
 
 def cligh():
 
-    user = cfg['github_user']
-
-    if ( os.path.exists(cfg['github_username_file']) ):
-        with open(cfg['github_username_file'], 'r') as github_login_file:
-            user = github_login_file.read().replace('\n', '')
-    elif args['--user']:
-        user = args['--user']
-
-    github.enable_console_debug_logging()
-    g = Github(cfg['github_user'], cfg['github_token'])
-
-    filterRe = re.compile(args['--filter'], re.IGNORECASE) if args['--filter'] else None
-
-    force = args['--all']
-    target = args['--target']
-
-    if args['batch-clone']:
-        batch_clone(target=target, filterRe=filterRe)
-
-    elif args['collabs']:
-
-        if args['leave']:
-            leave_collabs(force=force, filterRe=filterRe)
-
-        else :
-            list_collabs(filterRe=filterRe)
-
-    elif args['invitations']:
-
-            if args['accept']:
-                accept_invitations(force=force, filterRe=filterRe)
-
-            elif args['decline']:
-                decline_invitations(force=force, filterRe=filterRe)
-
-            else :
-                list_invitations(filterRe=filterRe)
-
-    elif args['user']:
-
-        if args['repos']:
-
-            if args['clone']:
-                clone_repos(user, target=target, filterRe=filterRe)
-
-            else:
-                list_repos(user, filterRe=filterRe)
-
-    
-
-if __name__ == '__main__':
     args = docopt(__doc__, version="cligh 0.1")
 
     load_config(force_prompt=args['config'])
@@ -484,7 +445,61 @@ if __name__ == '__main__':
     v3headers['Authorization'] = "bearer " + cfg['github_token']
     v4headers['Authorization'] = "bearer " + cfg['github_token']
 
+    user = cfg['github_user']
+
+    if ( os.path.exists(cfg['github_username_file']) ):
+        with open(cfg['github_username_file'], 'r') as github_login_file:
+            user = github_login_file.read().replace('\n', '')
+    
+    if args['--user']:
+        user = args['--user']
+
+    if user and not user_exists(user):
+        print("No GitHub user {} exists".format(user))
+        return
+
+    filterRe = re.compile(args['--filter'], re.IGNORECASE) if args['--filter'] else None
+
+    force = args['--all']
+    target = args['--target']
+
+
     try :
-        cligh()
+
+        if args['batch-clone']:
+            batch_clone(target=target, filterRe=filterRe)
+
+        elif args['collabs']:
+
+            if args['leave']:
+                leave_collabs(force=force, filterRe=filterRe)
+
+            else :
+                list_collabs(filterRe=filterRe)
+
+        elif args['invitations']:
+
+                if args['accept']:
+                    accept_invitations(force=force, filterRe=filterRe)
+
+                elif args['decline']:
+                    decline_invitations(force=force, filterRe=filterRe)
+
+                else :
+                    list_invitations(filterRe=filterRe)
+
+        elif args['user']:
+
+            if args['repos']:
+
+                if args['clone']:
+                    clone_repos(user, target=target, filterRe=filterRe)
+
+                else:
+                    list_repos(user, filterRe=filterRe)
+
     except KeyboardInterrupt:
         sys.exit()
+
+if __name__ == "__main__":
+    cligh()
