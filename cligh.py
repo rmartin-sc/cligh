@@ -15,7 +15,7 @@ from typing import Optional
 console = Console()
 app = typer.Typer(help=
     """A CLI program for performing bulk operations on GitHub repositories.  Useful when managing student repositories in a classroom situation.  
-        Requires, git and a GitHub user with an Access Token with the following scopes: repo, delete_repo."""
+        Requires, git and a GitHub user with an Access Token with the following scopes: repo, delete_repo, read:org."""
 )
 
 collabs_app = typer.Typer(help="Perform operations on repositories for which you are a collaborator")
@@ -66,8 +66,30 @@ def prompt_config(defaults=None):
 def invitation_name(i):
     return "{}/{}".format(i['inviter']['login'], i['repository']['name'] if i['repository'] else "")
 
-def repo_name(r):
+def repo_full_name(r):
     return r['full_name']
+
+def repo_owner_name(r):
+    return r['full_name'].split("/")[0]
+def repo_name(r):
+    return r['full_name'].split("/")[1]
+
+def check_name(name, is_org):
+    if is_org:
+        with spinner("Verifying organization {name}"):
+            name_exists = github.org_exists(name)
+    else:
+        with spinner("Verifying user {name}"):
+            name_exists = github.user_exists(name)
+
+    if not name_exists:
+        if is_org:
+            print(f"The organization {name} does not exist on GitHub.  If you are trying to list a user's repositories do NOT use the --org option.")
+        else:
+            print(f"The user {name} does not exist on GitHub.  If you are trying to list an organization's repositories use the --org option.")
+        return False
+
+    return True
 
 @repos_app.command("list")
 def list_repos(
@@ -77,21 +99,56 @@ def list_repos(
 ):
     """List all repositories for a GitHub user or organization"""
 
-    if is_org:
-        with spinner("Verifying organization {name}"):
-            name_exists = github.org_exists(name)
-    else:
-        with spinner("Verifying user {name}"):
-            name_exists = github.user_exists(name)
+    if not check_name(name, is_org):
+        return
 
-    if name_exists:
-        with spinner("Finding repos"):
-            [ print(repo_name(r)) for r in github.get_repos(name, is_org, filter_re) ]
-    else:
-        if is_org:
-            print(f"The organization {name} does not exist on GitHub.  If you are trying to list a user's repositories do NOT use the --org option.")
-        else:
-            print(f"The user {name} does not exist on GitHub.  If you are trying to list an organization's repositories use the --org option.")
+    with spinner("Finding repos"):
+        [ print(repo_full_name(r)) for r in github.get_repos(name, is_org, filter_re) ]
+
+@repos_app.command("delete")
+def delete_repos(
+    name : str = typer.Argument(..., help=STR_NAME_HELP),
+    is_org : Optional[bool] = typer.Option(False, "--org", help=STR_IS_ORG_HELP), 
+    all : bool = typer.Option(False, help=STR_ALL_HELP),
+    filter_re : Optional[str] = typer.Option(None, help=STR_FILTER_RE_HELP)
+):
+    """Bulk delete repositories for a GitHub user or organization"""
+
+    if not check_name(name, is_org):
+        return
+
+    with spinner("Finding repos"):
+        repos = github.get_repos(name, is_org, filter_re)
+
+    
+    if ( len(repos) == 0 ):
+        print("No repos to delete")
+        return
+
+    if ( all ):
+        [ print(repo_full_name(r)) for r in repos ]
+
+        print()
+        print("[bold yellow]WARNING:[/bold yellow] You are about to [bold red]DELETE[/bold red] ALL {} of the above repositories."
+            .format(len(repos)))
+        if ( inquirer.confirm("Are you sure you wish to continue?") ):
+            for r in repos:
+                print("[bold red]DELETING[/bold red] {}...".format(repo_full_name(r)), end="", flush=True)
+                github.delete_repo(repo_owner_name(r), repo_name(r))
+                print("done")
+
+    else: 
+        for r in repos:
+
+            if ( inquirer.confirm("Delete {}?".format(repo_full_name(r))) ) :
+                print("[bold red]DELETING[/bold red] {}...".format(repo_full_name(r)), end="", flush=True)     
+                github.delete_repo(repo_owner_name(r), repo_name(r))
+                print("done")
+            else:
+                print("SKIPPED {}".format(repo_full_name(r)))
+
+            print()
+
 
 @repos_app.command("clone")
 def clone_repos(
@@ -101,6 +158,9 @@ def clone_repos(
     filter_re : Optional[str] = typer.Option(None, help=STR_FILTER_RE_HELP)
 ):
     """Bulk clone repos from a given user or organization"""
+
+    if not check_name(name, is_org):
+        return
 
     with spinner("Finding repos"):
         repos = github.get_repos(name, is_org, filter_re)
@@ -190,7 +250,7 @@ def list_collabs(filter_re:Optional[str]= typer.Option(None, help=STR_FILTER_RE_
     with spinner("Finding collabs"):
         collabs = github.get_collabs(filter_re)
 
-    [ print(repo_name(r)) for r in collabs ]
+    [ print(repo_full_name(r)) for r in collabs ]
 
 @collabs_app.command("leave")
 def leave_collabs(
@@ -206,26 +266,26 @@ def leave_collabs(
         exit(0)
 
     if ( all ):
-        [ print(repo_name(r)) for r in repos ]
+        [ print(repo_full_name(r)) for r in repos ]
 
         print()
         print("[bold yellow]WARNING:[/bold yellow] You are about to [bold red]LEAVE[/bold red] as a collaborator ALL {} of the above repositories."
             .format(len(repos)))
         if ( inquirer.confirm("Are you sure you wish to continue?") ):
             for r in repos:
-                print("[bold red]LEAVING[/bold red] {}...".format(repo_name(r)), end="", flush=True)     
+                print("[bold red]LEAVING[/bold red] {}...".format(repo_full_name(r)), end="", flush=True)     
                 github.leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
                 print("done")
 
     else: 
         for r in repos:
 
-            if ( inquirer.confirm("Leave {}?".format(repo_name(r))) ) :
-                print("[bold red]LEAVING[/bold red] {}...".format(repo_name(r)), end="", flush=True)     
+            if ( inquirer.confirm("Leave {}?".format(repo_full_name(r))) ) :
+                print("[bold red]LEAVING[/bold red] {}...".format(repo_full_name(r)), end="", flush=True)     
                 github.leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
                 print("done")
             else:
-                print("SKIPPED {}".format(repo_name(r)))
+                print("SKIPPED {}".format(repo_full_name(r)))
 
             print()
 
