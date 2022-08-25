@@ -5,15 +5,14 @@ import json
 import os
 import re
 import requests
-import sys
 import typer
 
 from pathlib import Path
 from rich import print
+from rich.console import Console
 from typing import Optional
-from yaspin import yaspin
 
-
+console = Console()
 app = typer.Typer()
 
 collabs_app = typer.Typer(help="Perform operations on repositories for which you are a collaborator")
@@ -60,6 +59,9 @@ def open_json_file(file_path):
 
 def compile_re(re_str):
     return re.compile(re_str, re.IGNORECASE) if re_str else None
+
+def spinner(message):
+    return console.status(message, spinner="point")
 
 def load_config():
 
@@ -193,43 +195,43 @@ def v4request_all_pages(q, path_to_paginated_array):
 
     return final_response
 
-@yaspin(text="Verifying GitHub user...")
 def user_exists(name):
-    response = v4request("user(login: \"{}\") {{ login }}".format(name))
+    with spinner(f"Verifying GitHub user {name}"):
+        response = v4request("user(login: \"{}\") {{ login }}".format(name))
 
     if ( 'errors' in response ):
         return False
     
     return True
 
-@yaspin(text="Verifying GitHub organization...")
 def org_exists(name):
-    response = v4request("organization(login: \"{}\") {{ login }}".format(name))
+    with spinner("Verifying GitHub organization {name}"):
+        response = v4request("organization(login: \"{}\") {{ login }}".format(name))
 
     if ( 'errors' in response ):
         return False
     
     return True
 
-@yaspin(text="Getting repos...")
 def get_repos(name, is_org, filter_re=None):
 
     entity = "organization" if is_org else "user"
 
-    response = v4request_all_pages(
-        f'{entity}(login: "{name}")' 
-        + """
-                  {
-                    repositories(%s) {
-                      nodes  {
-                        full_name: nameWithOwner
-                        html_url: url
-                      }
-                      %s
+    with spinner(f"Getting repos for {'organization' if is_org else 'user'} {name}"):
+        response = v4request_all_pages(
+            f'{entity}(login: "{name}")' 
+            + """
+                    {
+                        repositories(%s) {
+                        nodes  {
+                            full_name: nameWithOwner
+                            html_url: url
+                        }
+                        %s
+                        }
                     }
-                  }
-            """, f"{entity}.repositories.nodes"
-    )
+                """, f"{entity}.repositories.nodes"
+        )
 
     ret = response['data'][entity]['repositories']['nodes']
 
@@ -350,9 +352,9 @@ def batch_get(
             print("[bold red]SKIPPING[/bold red] {} because no {} file was found".format(d, cfg['github_username_file']))
             continue
 
-@yaspin(text="Finding collabs...")
 def get_collabs(filter_re=None):
-    repos = v3request_all_pages("/user/repos", {"affiliation": "collaborator"})
+    with spinner("Finding collabs"):
+        repos = v3request_all_pages("/user/repos", {"affiliation": "collaborator"})
 
     if ( filter_re ):
         filter_re = compile_re(filter_re)
@@ -405,10 +407,10 @@ def leave_collabs(
 
             print()
 
-@yaspin(text="Finding invitations...")
 def get_invitations(filter_re=None):
 
-    invitations = v3request_all_pages("/user/repository_invitations")
+    with spinner("Finding invitations"):
+        invitations = v3request_all_pages("/user/repository_invitations")
     
     if ( filter_re ): 
         filter_re = compile_re(filter_re)
