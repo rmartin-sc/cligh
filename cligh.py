@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 import cfg
+import git
+import github
 import inquirer
 import os
-import re
-import requests
 import typer
 
 from pathlib import Path
@@ -13,7 +13,10 @@ from rich.console import Console
 from typing import Optional
 
 console = Console()
-app = typer.Typer()
+app = typer.Typer(help=
+    """A CLI program for performing bulk operations on GitHub repositories.  Useful when managing student repositories in a classroom situation.  
+        Requires, git and a GitHub user with an Access Token with the following scopes: repo, delete_repo."""
+)
 
 collabs_app = typer.Typer(help="Perform operations on repositories for which you are a collaborator")
 app.add_typer(collabs_app, name="collabs")
@@ -32,17 +35,6 @@ STR_FILTER_RE_HELP = "Only repos with names that contain this regex will be incl
 STR_IS_ORG_HELP = "If this option is on, the NAME argument is assumed to be an organization; otherwise, a user is assumed"
 STR_NAME_HELP = "The name of a GitHub user or organization"
 STR_TARGET_HELP = "The path in which to operate"
-
-V4_API_BASE = "https://api.github.com/graphql"
-V3_API_BASE = "https://api.github.com"
-
-v4headers = {}
-v3headers = {
-    "Accept" : "application/vnd.github.v3+json"
-}
-
-def compile_re(re_str):
-    return re.compile(re_str, re.IGNORECASE) if re_str else None
 
 def spinner(message):
     return console.status(message, spinner="point")
@@ -71,149 +63,6 @@ def prompt_config(defaults=None):
     
     return response_cfg
 
-def query(q):
-    return { "query" : " { " + q + " rateLimit { limit cost remaining resetAt } } " }
-
-def exit_on_bad_response(response):
-    if response.status_code >= 400:
-        print("{}\n{}".format(response.status_code, response.text))
-        exit(1)
-
-
-def v3Url(q):
-    return "{}{}".format(V3_API_BASE, q)
-
-def v3request_all_pages(q, data=None):
-
-    response = requests.get("{}{}".format(V3_API_BASE, q), headers=v3headers, params=data)
-
-    fullresponse = response.json()
-
-    while ( 'next' in response.links.keys() ):
-
-        response = requests.get(response.links['next']['url'], headers=v3headers)
-        fullresponse.extend(response.json())
-
-    return fullresponse
-
-def v4request(q):
-    response = requests.post(V4_API_BASE, json=query(q), headers=v4headers)
-    return response.json()
-
-def v4request_all_pages(q, path_to_paginated_array):
-
-    def get(json, path):
-
-        keys = path.split(".")
-
-        v = json
-
-        for k in keys:
-            v = v[k]
-
-        return v
-
-
-    def next_page(json, path_to_paginated_array):
-
-        keys = path_to_paginated_array.split(".")
-        # replace the paginated array node with the pageInfo node
-        del keys[-1]
-        keys.append('pageInfo')
-
-        v = json
-
-        for k in keys:
-            v = v[k]
-
-        if v['hasNextPage']:
-            return v['endCursor']
-
-        return None
-
-    def merge(response_a, response_b, path_to_paginated_array):
-        a = get(response_a, path_to_paginated_array)
-        b = get(response_b, path_to_paginated_array)
-
-        a += b
-
-    responses = []
-
-    path_to_paginated_array = "data." + path_to_paginated_array
-
-    cursor = ""
-
-    while True:
-        formatted_q = q % (\
-            ("after: \"{}\" ".format(cursor) if cursor else "") + "first: 50",\
-            " pageInfo { endCursor hasNextPage } ")
-        response = requests.post(V4_API_BASE, json=query(formatted_q), headers=v4headers)
-
-        if response.status_code != 200:
-            raise Exception("Request failed with code {}.\nRequest:\n{}\nResponse:\n{}".format(response.status_code, formatted_q, response))
-
-        response_json = response.json()
-
-        responses.append(response_json)
-
-        cursor = next_page(response_json, path_to_paginated_array)
-        if ( not cursor ) :
-            break
-
-    final_response = responses[0]
-    del responses[0]
-
-    for r in responses:
-        merge(final_response, r, path_to_paginated_array)
-
-    return final_response
-
-def user_exists(name):
-    with spinner(f"Verifying GitHub user {name}"):
-        response = v4request("user(login: \"{}\") {{ login }}".format(name))
-
-    if ( 'errors' in response ):
-        return False
-    
-    return True
-
-def org_exists(name):
-    with spinner("Verifying GitHub organization {name}"):
-        response = v4request("organization(login: \"{}\") {{ login }}".format(name))
-
-    if ( 'errors' in response ):
-        return False
-    
-    return True
-
-def get_repos(name, is_org, filter_re=None):
-
-    entity = "organization" if is_org else "user"
-
-    with spinner(f"Getting repos for {'organization' if is_org else 'user'} {name}"):
-        response = v4request_all_pages(
-            f'{entity}(login: "{name}")' 
-            + """
-                    {
-                        repositories(%s) {
-                        nodes  {
-                            full_name: nameWithOwner
-                            html_url: url
-                        }
-                        %s
-                        }
-                    }
-                """, f"{entity}.repositories.nodes"
-        )
-
-    ret = response['data'][entity]['repositories']['nodes']
-
-    if ( filter_re ):
-        filter_re = compile_re(filter_re)
-        return [ r for r in ret if filter_re.search(r['full_name']) ]
-
-    return ret
-
 def invitation_name(i):
     return "{}/{}".format(i['inviter']['login'], i['repository']['name'] if i['repository'] else "")
 
@@ -228,12 +77,21 @@ def list_repos(
 ):
     """List all repositories for a GitHub user or organization"""
 
-    [ print(repo_name(r)) for r in get_repos(name, is_org, filter_re) ]
+    if is_org:
+        with spinner("Verifying organization {name}"):
+            name_exists = github.org_exists(name)
+    else:
+        with spinner("Verifying user {name}"):
+            name_exists = github.user_exists(name)
 
-def pull_repo(target="."):
-    cmd = "pushd {} && git pull && popd".format(target)
-    print(cmd)
-    os.system(cmd)
+    if name_exists:
+        with spinner("Finding repos"):
+            [ print(repo_name(r)) for r in github.get_repos(name, is_org, filter_re) ]
+    else:
+        if is_org:
+            print(f"The organization {name} does not exist on GitHub.  If you are trying to list a user's repositories do NOT use the --org option.")
+        else:
+            print(f"The user {name} does not exist on GitHub.  If you are trying to list an organization's repositories use the --org option.")
 
 @repos_app.command("clone")
 def clone_repos(
@@ -244,7 +102,8 @@ def clone_repos(
 ):
     """Bulk clone repos from a given user or organization"""
 
-    repos = get_repos(name, is_org, filter_re)
+    with spinner("Finding repos"):
+        repos = github.get_repos(name, is_org, filter_re)
 
     if len(repos) == 0:
         print("No repos to clone")
@@ -280,11 +139,9 @@ def clone_repos(
             if len(repo_idxs) == 0:
                 print("No repos to clone")
 
-    print(repo_idxs)
     for i in repo_idxs:
-        cmd = "git clone {} {}".format(repos[i]['html_url'], into if into else "")
-        print(cmd)
-        os.system(cmd)
+        git.clone(repos[i]['html_url'], into)
+        
             
 @app.command()
 def batch_get(
@@ -310,13 +167,14 @@ def batch_get(
                     print("[bold red]SKIPPING[/bold red] {} because the {} file was empty".format(d, cfg.get('github_username_file')))
                     continue
 
-                if not user_exists(user):
-                    print("[bold red]SKIPPING[/bold red] {} because no GitHub user {} exists".format(d, user))
-                    continue
+                with spinner(f"Verifying GitHub user {user}"):
+                    if not github.user_exists(user):
+                        print("[bold red]SKIPPING[/bold red] {} because no GitHub user {} exists".format(d, user))
+                        continue
 
                 if os.path.exists(subdir_target):
                     print("[bold green]PULLING[/bold green] ({} already exists)".format(subdir_target))
-                    pull_repo(subdir_target)
+                    git.pull(subdir_target)
                     continue
                 else:
                     print("[bold green]CLONING[/bold green] into {}...".format(subdir_target))
@@ -325,24 +183,14 @@ def batch_get(
             print("[bold red]SKIPPING[/bold red] {} because no {} file was found".format(d, cfg.get('github_username_file')))
             continue
 
-def get_collabs(filter_re=None):
-    with spinner("Finding collabs"):
-        repos = v3request_all_pages("/user/repos", {"affiliation": "collaborator"})
-
-    if ( filter_re ):
-        filter_re = compile_re(filter_re)
-        return [ r for r in repos if filter_re.search(r['full_name']) ]
-
-    return repos
-
 @collabs_app.command("list")
 def list_collabs(filter_re:Optional[str]= typer.Option(None, help=STR_FILTER_RE_HELP)):
     """List all repositories for which you are a collaborator"""
-    [ print(repo_name(r)) for r in get_collabs(filter_re) ]
 
-def leave_collab(owner_login, repo_name, leaving_user_login):
-    response = requests.delete(v3Url("/repos/{}/{}/collaborators/{}".format(owner_login, repo_name, leaving_user_login)), headers=v3headers)
-    exit_on_bad_response(response)
+    with spinner("Finding collabs"):
+        collabs = github.get_collabs(filter_re)
+
+    [ print(repo_name(r)) for r in collabs ]
 
 @collabs_app.command("leave")
 def leave_collabs(
@@ -350,7 +198,8 @@ def leave_collabs(
     filter_re : Optional[str] = typer.Option(None, help=STR_FILTER_RE_HELP)
 ):
     """Bulk remove yourself as a collaborator from a set of repositories"""
-    repos = get_collabs(filter_re)
+    with spinner("Finding collabs"):
+        repos = github.get_collabs(filter_re)
 
     if ( len(repos) == 0 ):
         print("No repos to leave")
@@ -365,7 +214,7 @@ def leave_collabs(
         if ( inquirer.confirm("Are you sure you wish to continue?") ):
             for r in repos:
                 print("[bold red]LEAVING[/bold red] {}...".format(repo_name(r)), end="", flush=True)     
-                leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
+                github.leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
                 print("done")
 
     else: 
@@ -373,39 +222,20 @@ def leave_collabs(
 
             if ( inquirer.confirm("Leave {}?".format(repo_name(r))) ) :
                 print("[bold red]LEAVING[/bold red] {}...".format(repo_name(r)), end="", flush=True)     
-                leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
+                github.leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
                 print("done")
             else:
                 print("SKIPPED {}".format(repo_name(r)))
 
             print()
 
-def get_invitations(filter_re=None):
-
-    with spinner("Finding invitations"):
-        invitations = v3request_all_pages("/user/repository_invitations")
-    
-    if ( filter_re ): 
-        filter_re = compile_re(filter_re)
-        return [ i for i in invitations if (filter_re.search(i['repository']['full_name']) if i['repository'] else False) ]
-    else:
-        return [ i for i in invitations if i['repository'] ]
-
-    return invitations
-
 @invitations_app.command("list")
 def list_invitations(filter_re : Optional[str] = typer.Option(None, help=STR_FILTER_RE_HELP)):
     """List current pending invitations"""
+    with spinner("Finding invitations"):
+        invitations = github.get_invitations(filter_re)
 
-    [ print(invitation_name(i)) for i in get_invitations(filter_re) ]
-
-def accept_invitation(invitation_id):
-    response = requests.patch(v3Url("/user/repository_invitations/{}".format(invitation_id)), headers=v3headers)
-    exit_on_bad_response(response)
-
-def decline_invitation(invitation_id):
-    response = requests.delete(v3Url("/user/repository_invitations/{}".format(invitation_id)), headers=v3headers)    
-    exit_on_bad_response(response)
+    [ print(invitation_name(i)) for i in invitations ]
 
 @invitations_app.command("accept")
 def accept_invitations(
@@ -414,7 +244,8 @@ def accept_invitations(
 ):
     """Bulk accept invitations"""
 
-    invitations = get_invitations(filter_re)
+    with spinner("Finding invitations"):
+        invitations = github.get_invitations(filter_re)
 
     if ( len(invitations) == 0 ):
         print("No invitations to accept")
@@ -429,7 +260,7 @@ def accept_invitations(
         if ( inquirer.confirm("Are you sure you wish to continue?") ):
             for i in invitations:
                 print("[bold green]ACCEPTING[/bold green] {}...".format(invitation_name(i)), end="", flush=True)     
-                accept_invitation(i['id'])
+                github.accept_invitation(i['id'])
                 print("done")
 
     else: 
@@ -437,7 +268,7 @@ def accept_invitations(
 
             if ( inquirer.confirm("Accept {}?".format(invitation_name(i))) ) :
                 print("[bold green]ACCEPTING[/bold green] {}...".format(invitation_name(i)), end="", flush=True)     
-                accept_invitation(i['id'])
+                github.accept_invitation(i['id'])
                 print("done")
             else:
                 print("SKIPPED {}".format(invitation_name(i)))
@@ -451,7 +282,8 @@ def decline_invitations(
 ):
     """Bulk decline invitations"""
     
-    invitations = get_invitations(filter_re)
+    with spinner("Finding invitations"):
+        invitations = github.get_invitations(filter_re)
 
     if ( len(invitations) == 0 ):
         print("No invitations to decline")
@@ -467,7 +299,7 @@ def decline_invitations(
         if ( inquirer.confirm("Are you sure you wish to continue?") ):
             for i in invitations:
                 print("[bold red]DECLINING[/bold red] {}...".format(invitation_name(i)), end="", flush=True)     
-                decline_invitation(i['id'])
+                github.decline_invitation(i['id'])
                 print("done")
 
     else:
@@ -476,7 +308,7 @@ def decline_invitations(
 
             if ( inquirer.confirm("Decline {}?".format(invitation_name(i))) ) :
                 print("[bold red]DECLINING[/bold red] {}...".format(invitation_name(i)), end="", flush=True)     
-                decline_invitation(i['id'])
+                github.decline_invitation(i['id'])
                 print("done")
 
             else:
@@ -492,11 +324,14 @@ if __name__ == "__main__":
         
     cfg.load()
 
-    v3headers['Authorization'] = "bearer " + cfg.get('github_token')
-    v4headers['Authorization'] = "bearer " + cfg.get('github_token')
-
+    github.set_api_token(cfg.get('github_token'))
+    
     user = cfg.get('github_user')
-    if user and not user_exists(user):
+    
+    with spinner(f"Verifying GitHub user {user}"):
+        user_exists = github.user_exists(user)
+    
+    if not user_exists:
         print("No GitHub user named '{}' exists".format(user))
     else:
         app()
