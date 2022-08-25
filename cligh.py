@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
+import cfg
 import inquirer
-import json
 import os
 import re
 import requests
@@ -27,35 +27,19 @@ app.add_typer(invitations_app, name="invitations")
 repos_app = typer.Typer(help="Bulk repo operations for a specific user or organization")
 app.add_typer(repos_app, name="repos")
 
-
-CONFIG_PATH = os.path.join(Path.home(), ".cligh")
-CONFIG_FILE_NAME = "config.json"
-CONFIG_FILE_PATH = os.path.join(CONFIG_PATH, CONFIG_FILE_NAME)
-
 STR_ALL_HELP = "Process all items after a single confirmation instead of confirming for each item individually"
 STR_FILTER_RE_HELP = "Only repos with names that contain this regex will be included in the results"
 STR_IS_ORG_HELP = "If this option is on, the NAME argument is assumed to be an organization; otherwise, a user is assumed"
 STR_NAME_HELP = "The name of a GitHub user or organization"
 STR_TARGET_HELP = "The path in which to operate"
 
-
 V4_API_BASE = "https://api.github.com/graphql"
 V3_API_BASE = "https://api.github.com"
 
-cfg = {}
 v4headers = {}
 v3headers = {
     "Accept" : "application/vnd.github.v3+json"
 }
-
-def creds_are_missing():
-    return not 'github_user' in cfg or not cfg['github_user'] \
-        or not 'github_token' in cfg or not cfg['github_token']
-
-
-def open_json_file(file_path):
-    with open(file_path) as file:
-        return json.load(file)
 
 def compile_re(re_str):
     return re.compile(re_str, re.IGNORECASE) if re_str else None
@@ -63,40 +47,29 @@ def compile_re(re_str):
 def spinner(message):
     return console.status(message, spinner="point")
 
-def load_config():
-
-    if not os.path.exists(CONFIG_FILE_PATH):
-        print("This must be your first time running cligh!  Take a second to do some configuration...")
-        Path(CONFIG_PATH).mkdir(parents=True, exist_ok=True)
-        prompt_config()
-        return open_json_file(CONFIG_FILE_PATH)
-    else:
-        return open_json_file(CONFIG_FILE_PATH)
-
 @config_app.command("set")
 def config_set():
     """Set cligh configuration"""
-    existing_cfg = {}
-    if os.path.exists(CONFIG_FILE_PATH):
-        existing_cfg = open_json_file(CONFIG_FILE_PATH)
-    prompt_config(existing_cfg)
+    existing_cfg = cfg.get_all()
+    new_cfg = prompt_config(existing_cfg)
+    
+    print(f"Saving conifuration to {cfg.CONFIG_FILE_PATH}")
+    cfg.update(new_cfg)
 
 @config_app.command("list")
 def config_list():
     """List the current cligh configuration settings"""
-    print(cfg)
+    print(cfg.get_all())
 
 
 def prompt_config(defaults=None):
 
-    cfg['github_user'] = inquirer.text(message="What is your GitHub username?", default=defaults['github_user'] if defaults else ""),
-    cfg['github_token'] = inquirer.text(message="What is your GitHub access token?"),
-    cfg['github_username_file'] = inquirer.text(message="What name will you use for GitHub username files?", default=defaults['github_username_file'] if defaults else "")
+    response_cfg = {}
+    response_cfg['github_user'] = inquirer.text(message="What is your GitHub username?", default=defaults['github_user'] if defaults else ""),
+    response_cfg['github_token'] = inquirer.text(message="What is your GitHub access token?"),
+    response_cfg['github_username_file'] = inquirer.text(message="What name will you use for GitHub username files?", default=defaults['github_username_file'] if defaults else "")
     
-    print(f"Saving conifuration to {CONFIG_FILE_PATH}")
-
-    with open(CONFIG_FILE_PATH, 'w+') as config_file:
-        json.dump(cfg, config_file, indent=4, sort_keys=True)
+    return response_cfg
 
 def query(q):
     return { "query" : " { " + q + " rateLimit { limit cost remaining resetAt } } " }
@@ -326,7 +299,7 @@ def batch_get(
 
         subdir_target = os.path.join(d, into if into else "")
 
-        p = os.path.join(d, cfg['github_username_file'])
+        p = os.path.join(d, cfg.get('github_username_file'))
         if ( os.path.exists(p) ):
 
             with open(p, 'r') as github_login_file:
@@ -334,7 +307,7 @@ def batch_get(
                 user = github_login_file.read().replace('\n', '')
 
                 if user == '' :
-                    print("[bold red]SKIPPING[/bold red] {} because the {} file was empty".format(d, cfg['github_username_file']))
+                    print("[bold red]SKIPPING[/bold red] {} because the {} file was empty".format(d, cfg.get('github_username_file')))
                     continue
 
                 if not user_exists(user):
@@ -349,7 +322,7 @@ def batch_get(
                     print("[bold green]CLONING[/bold green] into {}...".format(subdir_target))
                     clone_repos(user, subdir_target, is_org=False, filter_re=filter_re)
         else:
-            print("[bold red]SKIPPING[/bold red] {} because no {} file was found".format(d, cfg['github_username_file']))
+            print("[bold red]SKIPPING[/bold red] {} because no {} file was found".format(d, cfg.get('github_username_file')))
             continue
 
 def get_collabs(filter_re=None):
@@ -392,7 +365,7 @@ def leave_collabs(
         if ( inquirer.confirm("Are you sure you wish to continue?") ):
             for r in repos:
                 print("[bold red]LEAVING[/bold red] {}...".format(repo_name(r)), end="", flush=True)     
-                leave_collab(r['owner']['login'], r['name'], cfg['github_user'])
+                leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
                 print("done")
 
     else: 
@@ -400,7 +373,7 @@ def leave_collabs(
 
             if ( inquirer.confirm("Leave {}?".format(repo_name(r))) ) :
                 print("[bold red]LEAVING[/bold red] {}...".format(repo_name(r)), end="", flush=True)     
-                leave_collab(r['owner']['login'], r['name'], cfg['github_user'])
+                leave_collab(r['owner']['login'], r['name'], cfg.get('github_user'))
                 print("done")
             else:
                 print("SKIPPED {}".format(repo_name(r)))
@@ -512,13 +485,17 @@ def decline_invitations(
             print()
 
 if __name__ == "__main__":
-    cfg = load_config()
+    if not cfg.is_initialized():
+        print("This must be your first time running cligh!  Take a second to do some configuration...")
+        new_cfg = prompt_config()
+        cfg.update(new_cfg)
+        
+    cfg.load()
 
-    v3headers['Authorization'] = "bearer " + cfg['github_token']
-    v4headers['Authorization'] = "bearer " + cfg['github_token']
+    v3headers['Authorization'] = "bearer " + cfg.get('github_token')
+    v4headers['Authorization'] = "bearer " + cfg.get('github_token')
 
-    user = cfg['github_user']
-
+    user = cfg.get('github_user')
     if user and not user_exists(user):
         print("No GitHub user named '{}' exists".format(user))
     else:
