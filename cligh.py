@@ -57,10 +57,11 @@ def config_list():
 def prompt_config(defaults=None):
 
     response_cfg = {}
-    response_cfg['github_user'] = inquirer.text(message="What is your GitHub username?", default=defaults['github_user'] if defaults else ""),
-    response_cfg['github_token'] = inquirer.text(message="What is your GitHub access token?"),
+    response_cfg['github_user'] = inquirer.text(message="What is your GitHub username?", default=defaults['github_user'] if defaults else "")
+    response_cfg['github_token'] = inquirer.text(message="What is your GitHub access token?")
     response_cfg['github_username_file'] = inquirer.text(message="What name will you use for GitHub username files?", default=defaults['github_username_file'] if defaults else "")
     
+    print(response_cfg)
     return response_cfg
 
 def invitation_name(i):
